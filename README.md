@@ -19,3 +19,6 @@ fastled/FastLED
 tinyu-zhao/INA3221
 
 mathertel/OneButton @ ^2.5.0
+
+## S.BUS受信機との接続
+![受信機との接続](rx2grove.png)
