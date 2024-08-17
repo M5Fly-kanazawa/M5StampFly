@@ -24,37 +24,38 @@
  */
 
 #include "rc.hpp"
+#include "sbus.hpp"
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include "flight_control.hpp"
 
-// esp_now_peer_info_t slave;
 
-volatile uint16_t Connect_flag = 0;
-
-// Telemetry相手のMAC ADDRESS 4C:75:25:AD:B6:6C
+// Telemetry相手のMAC ADDRESS 
+// 4C:75:25:AD:B6:6C
 // ATOM Lite (C): 4C:75:25:AE:27:FC
-// 4C:75:25:AD:8B:20
-// 4C:75:25:AF:4E:84
-// 4C:75:25:AD:8B:20
-// 4C:75:25:AD:8B:20 赤水玉テープ　ATOM lite
-uint8_t TelemAddr[6] = {0};
-// uint8_t TelemAddr[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+// 赤水玉テープ　ATOM lite: 4C:75:25:AD:8B:20 
+uint8_t TelemAddr[6] = {0,0,0,0,0,0};
+volatile uint16_t Connect_flag = 0;
+volatile uint8_t Rc_err_flag  = 0;
+volatile float Stick[18];
+volatile uint8_t Recv_MAC[3];
 volatile uint8_t MyMacAddr[6];
 volatile uint8_t peer_command[4] = {0xaa, 0x55, 0x16, 0x88};
-volatile uint8_t Rc_err_flag     = 0;
+
 esp_now_peer_info_t peerInfo;
 
-// RC
-volatile float Stick[16];
-volatile uint8_t Recv_MAC[3];
-
 void on_esp_now_sent(const uint8_t *mac_addr, esp_now_send_status_t status);
+void packetChannels(void);
 
-// 受信コールバック
+void rc_loop(void) {
+    Connect_flag = sbus_loop();
+    packetChannels();
+}
+
+// ESP-NOW受信コールバック
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len) {
-    Connect_flag = 0;
+    //Connect_flag = 0;
 
     uint8_t *d_int;
     // int16_t d_short;
@@ -72,74 +73,6 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
             esp_now_register_send_cb(on_esp_now_sent);
         }
     }
-
-    Recv_MAC[0] = recv_data[0];
-    Recv_MAC[1] = recv_data[1];
-    Recv_MAC[2] = recv_data[2];
-
-    if ((recv_data[0] == MyMacAddr[3]) && (recv_data[1] == MyMacAddr[4]) && (recv_data[2] == MyMacAddr[5])) {
-        Rc_err_flag = 0;
-    } else {
-        Rc_err_flag = 1;
-        return;
-    }
-
-    // checksum
-    uint8_t check_sum = 0;
-    for (uint8_t i = 0; i < 24; i++) check_sum = check_sum + recv_data[i];
-    // if (check_sum!=recv_data[23])USBSerial.printf("checksum=%03d recv_sum=%03d\n\r", check_sum, recv_data[23]);
-    if (check_sum != recv_data[24]) {
-        Rc_err_flag = 1;
-        return;
-    }
-
-    d_int         = (uint8_t *)&d_float;
-    d_int[0]      = recv_data[3];
-    d_int[1]      = recv_data[4];
-    d_int[2]      = recv_data[5];
-    d_int[3]      = recv_data[6];
-    Stick[RUDDER] = d_float;
-
-    d_int[0]        = recv_data[7];
-    d_int[1]        = recv_data[8];
-    d_int[2]        = recv_data[9];
-    d_int[3]        = recv_data[10];
-    Stick[THROTTLE] = d_float;
-
-    d_int[0]       = recv_data[11];
-    d_int[1]       = recv_data[12];
-    d_int[2]       = recv_data[13];
-    d_int[3]       = recv_data[14];
-    Stick[AILERON] = d_float;
-
-    d_int[0]        = recv_data[15];
-    d_int[1]        = recv_data[16];
-    d_int[2]        = recv_data[17];
-    d_int[3]        = recv_data[18];
-    Stick[ELEVATOR] = d_float;
-
-    Stick[BUTTON_ARM]     = recv_data[19];//auto_up_down_status
-    Stick[BUTTON_FLIP]    = recv_data[20];
-    Stick[CONTROLMODE]    = recv_data[21];//Mode:rate or angle control
-    Stick[ALTCONTROLMODE] = recv_data[22];//高度制御
-
-    ahrs_reset_flag = recv_data[23];
-
-    Stick[LOG] = 0.0;
-    // if (check_sum!=recv_data[23])USBSerial.printf("checksum=%03d recv_sum=%03d\n\r", check_sum, recv_data[23]);
-
-#if 0
-  USBSerial.printf("%6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f  %6.3f\n\r", 
-                                            Stick[THROTTLE],
-                                            Stick[AILERON],
-                                            Stick[ELEVATOR],
-                                            Stick[RUDDER],
-                                            Stick[BUTTON_ARM],
-                                            Stick[BUTTON_FLIP],
-                                            Stick[CONTROLMODE],
-                                            Stick[ALTCONTROLMODE],
-                                            Stick[LOG]);
-#endif
 }
 
 // 送信コールバック
@@ -148,10 +81,69 @@ void on_esp_now_sent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     esp_now_send_status = status;
 }
 
-void rc_init(void) {
-    // Initialize Stick list
-    for (uint8_t i = 0; i < 16; i++) Stick[i] = 0.0;
+float dead_band(float x, float min, float max) {
+    if ( (min < x) && (x < max)  ) x = 0.0;
+    return x;
+}
 
+void packetChannels(void)
+{
+#if 0
+    USBSerial.printf("%04d %04d %04d %04d %04d %04d %04d %04d %04d %04d %04d %04d %04d %04d %04d %04d  %04d %04d \n\r", 
+        sbus_getChannel(1),//ch1
+        sbus_getChannel(2),//ch2
+        sbus_getChannel(3),//ch3
+        sbus_getChannel(4),//ch4
+        sbus_getChannel(5),//SF
+        sbus_getChannel(6),//SB
+        sbus_getChannel(7),//SC
+        sbus_getChannel(8),//SG
+        sbus_getChannel(9),//SE
+        sbus_getChannel(10),//SA
+        sbus_getChannel(11),//SD
+        sbus_getChannel(12),//SH
+        sbus_getChannel(13),//not installed
+        sbus_getChannel(14),//not installed
+        sbus_getChannel(15),//not installed
+        sbus_getChannel(16),//not installed
+        sbus_getChannel(17),//not installed
+        sbus_getChannel(18));//not installed
+#endif
+
+
+    Stick[AILERON]=  2.0 * (float)(sbus_getChannel(4) - AILERON_MID)/(float)(AILERON_MAX - AILERON_MIN);
+    Stick[ELEVATOR]= 2.0 * (float)(sbus_getChannel(2) - ELEVATOR_MID)/(float)(ELEVATOR_MAX - ELEVATOR_MIN);
+    Stick[THROTTLE]= 2.0 * (float)(sbus_getChannel(3) - THROTTLE_MID)/(float)(THROTTLE_MAX - THROTTLE_MIN);
+    Stick[RUDDER]=   2.0 * (float)(sbus_getChannel(1) - RUDDER_MID)/(float)(RUDDER_MAX - RUDDER_MIN);
+    Stick[CONTROLMODE] = 0;
+    Stick[BUTTON_ARM] = (uint8_t)(sbus_getChannel(5)>1100);//auto_up_down_status    
+    Stick[ALTCONTROLMODE] = 1;//高度制御
+    Stick[BUTTON_FLIP] = 0;
+    
+    Stick[THROTTLE] = 0.8 * dead_band(Stick[THROTTLE], -0.15, 0.15);
+#if 0
+    USBSerial.printf("%6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f  %6.3f\n\r", 
+                                                Stick[THROTTLE],
+                                                Stick[AILERON],
+                                                Stick[ELEVATOR],
+                                                Stick[RUDDER],
+                                                Stick[BUTTON_ARM],
+                                                Stick[BUTTON_FLIP],
+                                                Stick[CONTROLMODE],
+                                                Stick[ALTCONTROLMODE],
+                                                Stick[LOG]);
+#endif
+
+}
+
+void rc_init(void) {
+    //
+    //Initialize S.BUS
+    sbus_init();
+    for (uint8_t i = 0; i < 18; i++) Stick[i] = 0.0;
+    
+    //
+    //Initialize ESP-NOW Telemetry
     // ESP-NOW初期化
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
@@ -197,7 +189,7 @@ void rc_init(void) {
 
     // ESP-NOWコールバック登録
     esp_now_register_recv_cb(OnDataRecv);
-    USBSerial.println("ESP-NOW Ready.");
+    USBSerial.println("ESP-NOW Ready.");    
 }
 
 void send_peer_info(void) {
@@ -239,10 +231,6 @@ uint8_t telemetry_send(uint8_t *data, uint16_t datalen) {
     return error_flag;
 }
 
-void rc_end(void) {
-    // Ps3.end();
-}
-
 uint8_t rc_isconnected(void) {
     bool status;
     Connect_flag++;
@@ -252,7 +240,4 @@ uint8_t rc_isconnected(void) {
         status = 0;
     // USBSerial.printf("%d \n\r", Connect_flag);
     return status;
-}
-
-void rc_demo() {
 }
