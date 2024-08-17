@@ -28,31 +28,30 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include "flight_control.hpp"
+#include "CrsfSerial.h"
 
-// esp_now_peer_info_t slave;
-
-volatile uint16_t Connect_flag = 0;
-
-// Telemetry相手のMAC ADDRESS 4C:75:25:AD:B6:6C
+// Telemetry相手のMAC ADDRESS 
+// 4C:75:25:AD:B6:6C
 // ATOM Lite (C): 4C:75:25:AE:27:FC
-// 4C:75:25:AD:8B:20
-// 4C:75:25:AF:4E:84
-// 4C:75:25:AD:8B:20
-// 4C:75:25:AD:8B:20 赤水玉テープ　ATOM lite
-uint8_t TelemAddr[6] = {0};
-// uint8_t TelemAddr[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-volatile uint8_t MyMacAddr[6];
-volatile uint8_t peer_command[4] = {0xaa, 0x55, 0x16, 0x88};
-volatile uint8_t Rc_err_flag     = 0;
-esp_now_peer_info_t peerInfo;
-
-// RC
+// 赤水玉テープ　ATOM lite: 4C:75:25:AD:8B:20 
+uint8_t TelemAddr[6] = {0,0,0,0,0,0};
+volatile uint16_t Connect_flag = 0;
+volatile uint8_t Rc_err_flag  = 0;
 volatile float Stick[16];
 volatile uint8_t Recv_MAC[3];
+volatile uint8_t MyMacAddr[6];
+volatile uint8_t peer_command[4] = {0xaa, 0x55, 0x16, 0x88};
+
+CrsfSerial crsf(Serial1, CRSF_BAUDRATE);
+esp_now_peer_info_t peerInfo;
 
 void on_esp_now_sent(const uint8_t *mac_addr, esp_now_send_status_t status);
 
-// 受信コールバック
+void csrfloop(void) {
+    crsf.loop();
+}
+
+// ESP-NOW受信コールバック
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len) {
     Connect_flag = 0;
 
@@ -72,7 +71,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
             esp_now_register_send_cb(on_esp_now_sent);
         }
     }
-
+    #if 0
     Recv_MAC[0] = recv_data[0];
     Recv_MAC[1] = recv_data[1];
     Recv_MAC[2] = recv_data[2];
@@ -127,7 +126,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
 
     Stick[LOG] = 0.0;
     // if (check_sum!=recv_data[23])USBSerial.printf("checksum=%03d recv_sum=%03d\n\r", check_sum, recv_data[23]);
-
+    #endif
 #if 0
   USBSerial.printf("%6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f  %6.3f\n\r", 
                                             Stick[THROTTLE],
@@ -148,10 +147,67 @@ void on_esp_now_sent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     esp_now_send_status = status;
 }
 
+void packetChannels(void)
+{
+    Connect_flag = 0;
+    #if 0
+    USBSerial.printf("%04df %04d %04d %04d %04d %04d %04d %04d %04d %04d %04d %04d %04d %04d %04d %04d \n\r", 
+        crsf.getChannel(1),//ch1
+        crsf.getChannel(2),//ch2
+        crsf.getChannel(3),//ch3
+        crsf.getChannel(4),//ch4
+        crsf.getChannel(5),//SF
+        crsf.getChannel(6),//SB
+        crsf.getChannel(7),//SC
+        crsf.getChannel(8),//SG
+        crsf.getChannel(9),//SE
+        crsf.getChannel(10),//SA
+        crsf.getChannel(11),//SD
+        crsf.getChannel(12),//SH
+        crsf.getChannel(13),//not installed
+        crsf.getChannel(14),//not installed
+        crsf.getChannel(15),//not installed
+        crsf.getChannel(16));//not installed
+    #endif
+
+
+#if 1
+    Stick[AILERON]=  2.0 * (float)(crsf.getChannel(1) - AILERON_MID)/(float)(AILERON_MAX - AILERON_MIN);
+    Stick[ELEVATOR]= 2.0 * (float)(crsf.getChannel(2) - ELEVATOR_MID)/(float)(ELEVATOR_MAX - ELEVATOR_MIN);
+    Stick[THROTTLE]= 2.0 * (float)(crsf.getChannel(3) - THROTTLE_MID)/(float)(THROTTLE_MAX - THROTTLE_MIN);
+    Stick[RUDDER]=   2.0 * (float)(crsf.getChannel(4) - RUDDER_MID)/(float)(RUDDER_MAX - RUDDER_MIN);
+    Stick[CONTROLMODE] = (uint8_t)(crsf.getChannel(5)>1600);
+    Stick[BUTTON_ARM] = (uint8_t)(crsf.getChannel(8)>1600);//auto_up_down_status    
+    Stick[ALTCONTROLMODE] = (uint8_t)(crsf.getChannel(9)>1600);//高度制御
+    Stick[BUTTON_FLIP] = (uint8_t)(crsf.getChannel(12)>1600);
+
+
+    USBSerial.printf("%6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f  %6.3f\n\r", 
+                                                Stick[THROTTLE],
+                                                Stick[AILERON],
+                                                Stick[ELEVATOR],
+                                                Stick[RUDDER],
+                                                Stick[BUTTON_ARM],
+                                                Stick[BUTTON_FLIP],
+                                                Stick[CONTROLMODE],
+                                                Stick[ALTCONTROLMODE],
+                                                Stick[LOG]);
+#endif
+
+}
+
 void rc_init(void) {
+    //
+    //Initialize ELRS
+    Serial1.begin(CRSF_BAUDRATE,SERIAL_8N1, 1, 2);
+    crsf.begin(CRSF_BAUDRATE);
+    // Attach the channels callback
+    crsf.onPacketChannels = &packetChannels;
     // Initialize Stick list
     for (uint8_t i = 0; i < 16; i++) Stick[i] = 0.0;
-
+    
+    //
+    //Initialize ESP-NOW Telemetry
     // ESP-NOW初期化
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
@@ -197,7 +253,7 @@ void rc_init(void) {
 
     // ESP-NOWコールバック登録
     esp_now_register_recv_cb(OnDataRecv);
-    USBSerial.println("ESP-NOW Ready.");
+    USBSerial.println("ESP-NOW Ready.");    
 }
 
 void send_peer_info(void) {
@@ -239,10 +295,6 @@ uint8_t telemetry_send(uint8_t *data, uint16_t datalen) {
     return error_flag;
 }
 
-void rc_end(void) {
-    // Ps3.end();
-}
-
 uint8_t rc_isconnected(void) {
     bool status;
     Connect_flag++;
@@ -252,7 +304,4 @@ uint8_t rc_isconnected(void) {
         status = 0;
     // USBSerial.printf("%d \n\r", Connect_flag);
     return status;
-}
-
-void rc_demo() {
 }

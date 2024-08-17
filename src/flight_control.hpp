@@ -50,8 +50,8 @@
 #define ANGLECONTROL 0
 #define RATECONTROL  1
 
-#define AUTO_ALT   4
-#define MANUAL_ALT 5
+#define AUTO_ALT   1
+#define MANUAL_ALT 0
 
 #define ALT_LIMIT   (2.0)
 #define ALT_REF_MIN (0.05)

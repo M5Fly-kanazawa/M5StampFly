@@ -304,6 +304,9 @@ void loop_400Hz(void) {
     sense_time       = sensor_read();
     uint32_t cs_time = micros();
 
+    //RC Update
+    csrfloop();
+
     // LED Drive
     led_drive();
     // if (Interval_time>0.006)USBSerial.printf("%9.6f\n\r", Interval_time);
@@ -708,91 +711,6 @@ void get_command(void)
     if(Flip_flag == 1)Mode = FLIP_MODE;
   }
 }
-
-#if 0
-float get_trim_duty(float voltage) {
-    return -0.2448f * voltage + 1.5892f;
-}
-
-void get_command(void) {
-    static uint16_t stick_count = 0;
-    static float auto_throttle  = 0.0f;
-    static float old_alt        = 0.0;
-    float th, thlo;
-    float throttle_limit = 0.7;
-    float thrust_max;
-
-    Control_mode = Stick[CONTROLMODE];
-    if ((uint8_t)Stick[ALTCONTROLMODE] == AUTO_ALT)
-        Throttle_control_mode = 1;
-    else if ((uint8_t)Stick[ALTCONTROLMODE] == MANUAL_ALT)
-        Throttle_control_mode = 0;
-    else
-        Throttle_control_mode = 0;
-
-    // Thrust control
-    thlo = Stick[THROTTLE];
-    // thlo = thlo/throttle_limit;
-
-    if (Throttle_control_mode == 0) {
-        // Manual Throttle
-        if (thlo < 0.0) thlo = 0.0;
-        if (thlo > 1.0f) thlo = 1.0f;
-        if ((-0.2 < thlo) && (thlo < 0.2)) thlo = 0.0f;  // 不感帯
-        // Throttle curve conversion　スロットルカーブ補正
-        th             = (4.13e-3 + 3.3f * thlo - 5.44f * thlo * thlo + 3.13f * thlo * thlo * thlo) * BATTERY_VOLTAGE;
-        Thrust_command = Thrust_filtered.update(th, Interval_time);
-    } else if (Throttle_control_mode == 1) {
-        // Auto Throttle Altitude Control
-        Alt_flag = 1;
-        if (Auto_takeoff_counter < 500) {
-            Thrust0 = (float)Auto_takeoff_counter / 1000.0;
-            if (Thrust0 > get_trim_duty(3.8)) Thrust0 = get_trim_duty(3.8);
-            Auto_takeoff_counter++;
-        } else if (Auto_takeoff_counter < 1000) {
-            Thrust0 = (float)Auto_takeoff_counter / 1000.0;
-            if (Thrust0 > get_trim_duty(Voltage)) Thrust0 = get_trim_duty(Voltage);
-            Auto_takeoff_counter++;
-        } else
-            Thrust0 = get_trim_duty(Voltage);
-
-        // Get Altitude ref
-        if ((-0.2 < thlo) && (thlo < 0.2)) thlo = 0.0f;  // 不感帯
-        Alt_ref = Alt_ref + thlo * 0.001;
-        if (Alt_ref > ALT_REF_MAX) Alt_ref = ALT_REF_MAX;
-        if (Alt_ref < ALT_REF_MIN) Alt_ref = ALT_REF_MIN;
-        if ((Range0flag > OladRange0flag) || (Range0flag == RNAGE0FLAG_MAX)) {
-            Thrust0        = Thrust0 - 0.02;
-            OladRange0flag = Range0flag;
-        }
-        Thrust_command = Thrust0 * BATTERY_VOLTAGE;
-    }
-
-    Roll_angle_command = 0.4 * Stick[AILERON];
-    if (Roll_angle_command < -1.0f) Roll_angle_command = -1.0f;
-    if (Roll_angle_command > 1.0f) Roll_angle_command = 1.0f;
-    Pitch_angle_command = 0.4 * Stick[ELEVATOR];
-    if (Pitch_angle_command < -1.0f) Pitch_angle_command = -1.0f;
-    if (Pitch_angle_command > 1.0f) Pitch_angle_command = 1.0f;
-
-    Yaw_angle_command = Stick[RUDDER];
-    if (Yaw_angle_command < -1.0f) Yaw_angle_command = -1.0f;
-    if (Yaw_angle_command > 1.0f) Yaw_angle_command = 1.0f;
-    // Yaw control
-    Yaw_rate_reference = 2.0f * PI * (Yaw_angle_command - Rudder_center);
-
-    if (Control_mode == RATECONTROL) {
-        Roll_rate_reference  = 240 * PI / 180 * Roll_angle_command;
-        Pitch_rate_reference = 240 * PI / 180 * Pitch_angle_command;
-    }
-
-    // flip button check
-    if (Flip_flag == 0 /*&& Throttle_control_mode == 0*/) {
-        Flip_flag = get_flip_button();
-        if (Flip_flag == 1) Mode = FLIP_MODE;
-    }
-}
-#endif
 
 uint8_t auto_landing(void) {
     // Auto Landing

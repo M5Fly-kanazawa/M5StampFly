@@ -47,23 +47,27 @@
 #define CONTROLMODE    11
 #define ALTCONTROLMODE 12
 
-#define RUDDER_MAX   511
-#define RUDDER_MIN   -512
-#define ELEVATOR_MAX 127
-#define ELEVATOR_MIN -128
-#define THROTTLE_MAX 511
-#define THROTTLE_MIN -512
-#define AILERON_MAX  127
-#define AILERON_MIN  -128
+#define RUDDER_MIN   989
+#define RUDDER_MID  1500
+#define RUDDER_MAX  2011
+#define ELEVATOR_MIN  989
+#define ELEVATOR_MID 1500
+#define ELEVATOR_MAX 2011
+#define THROTTLE_MIN  989
+#define THROTTLE_MID 1500
+#define THROTTLE_MAX 2011
+#define AILERON_MIN  989
+#define AILERON_MID 1500
+#define AILERON_MAX 2011
 
 #define LOG_MAX 1
 #define LOG_MIN 0
 #define CH6MAX  127
 #define CH6MIN  -128
 
-#define RUDDER_MAX_JOYC   100
-#define ELEVATOR_MAX      127
-#define THROTTLE_MAX_JOYC 100
+//#define RUDDER_MAX_JOYC   100
+//#define ELEVATOR_MAX      127
+//#define THROTTLE_MAX_JOYC 100
 
 void rc_init(void);
 void rc_demo(void);
@@ -71,6 +75,7 @@ void rc_end(void);
 uint8_t rc_isconnected(void);
 uint8_t telemetry_send(uint8_t* data, uint16_t datalen);
 void send_peer_info(void);
+void csrfloop(void);
 
 extern volatile float Stick[16];
 extern volatile uint8_t Rc_err_flag;
