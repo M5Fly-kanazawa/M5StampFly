@@ -58,7 +58,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
 
     uint8_t *d_int;
     // int16_t d_short;
-    float d_float;
+    uint16_t d_uint16;
 
     if (!TelemAddr[0] && !TelemAddr[1] && !TelemAddr[2] && !TelemAddr[3] && !TelemAddr[4] && !TelemAddr[5]) {
         memcpy(TelemAddr, mac_addr, 6);
@@ -86,49 +86,46 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
 
     // checksum
     uint8_t check_sum = 0;
-    for (uint8_t i = 0; i < 24; i++) check_sum = check_sum + recv_data[i];
+    for (uint8_t i = 0; i < 13; i++) check_sum = check_sum + recv_data[i];
     // if (check_sum!=recv_data[23])USBSerial.printf("checksum=%03d recv_sum=%03d\n\r", check_sum, recv_data[23]);
-    if (check_sum != recv_data[24]) {
+    if (check_sum != recv_data[13]) {
         Rc_err_flag = 1;
         return;
     }
 
-    d_int         = (uint8_t *)&d_float;
-    d_int[0]      = recv_data[3];
-    d_int[1]      = recv_data[4];
-    d_int[2]      = recv_data[5];
-    d_int[3]      = recv_data[6];
-    Stick[RUDDER] = d_float;
+    uint16_t dummy;
+
+    d_int[0]        = recv_data[3];
+    d_int[1]        = recv_data[4];
+    dummy = d_uint16;
+    Stick[THROTTLE] = (float)(dummy - 2048)/(float)(4096*0.5);
+
+    d_int[0]       = recv_data[5];
+    d_int[1]       = recv_data[6];
+    dummy = d_uint16;
+    Stick[AILERON] = (float)(dummy - 2048)/(float)(4096*0.5);
 
     d_int[0]        = recv_data[7];
     d_int[1]        = recv_data[8];
-    d_int[2]        = recv_data[9];
-    d_int[3]        = recv_data[10];
-    Stick[THROTTLE] = d_float;
+    dummy = d_uint16;
+    Stick[ELEVATOR] = (float)(dummy - 2048)/(float)(4096*0.5);
 
-    d_int[0]       = recv_data[11];
-    d_int[1]       = recv_data[12];
-    d_int[2]       = recv_data[13];
-    d_int[3]       = recv_data[14];
-    Stick[AILERON] = d_float;
+    d_int[0]      = recv_data[9];
+    d_int[1]      = recv_data[10];
+    dummy = d_uint16;
+    Stick[RUDDER] = (float)(dummy - 2048)/(float)(4096*0.5);
 
-    d_int[0]        = recv_data[15];
-    d_int[1]        = recv_data[16];
-    d_int[2]        = recv_data[17];
-    d_int[3]        = recv_data[18];
-    Stick[ELEVATOR] = d_float;
+    Stick[BUTTON_ARM]     = 0x0001 & recv_data[11];  // auto_up_down_status
+    Stick[BUTTON_FLIP]    = (0x0002 & recv_data[11])>>1;  // flip_status
+    Stick[CONTROLMODE]    = (0x0004 & recv_data[11])>>2;  // Mode:rate or angle control
+    Stick[ALTCONTROLMODE] = (0x0008 & recv_data[11])>>3;  // 高度制御
 
-    Stick[BUTTON_ARM]     = recv_data[19];  // auto_up_down_status
-    Stick[BUTTON_FLIP]    = recv_data[20];
-    Stick[CONTROLMODE]    = recv_data[21];  // Mode:rate or angle control
-    Stick[ALTCONTROLMODE] = recv_data[22];  // 高度制御
-
-    ahrs_reset_flag = recv_data[23];
+    ahrs_reset_flag = recv_data[12];
 
     Stick[LOG] = 0.0;
     // if (check_sum!=recv_data[23])USBSerial.printf("checksum=%03d recv_sum=%03d\n\r", check_sum, recv_data[23]);
 
-#if 0
+#if 1
   USBSerial.printf("%6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f  %6.3f\n\r", 
                                             Stick[THROTTLE],
                                             Stick[AILERON],
