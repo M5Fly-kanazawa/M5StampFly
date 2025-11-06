@@ -65,6 +65,15 @@
 #define ELEVATOR_MAX      127
 #define THROTTLE_MAX_JOYC 100
 
+typedef struct cmdrcint {
+  int16_t roll;     // scaled [-32768..32767] → [-1..+1]
+  int16_t pitch;
+  int16_t yaw;
+  int16_t thrust;   // [0..32767] → [0..100%]
+  uint16_t aux;     // bitfield (flight mode switches, arm/disarm, etc)
+  uint16_t rsv;     // reserved for future
+}CmdRC_int_t;
+
 void rc_init(void);
 void rc_demo(void);
 void rc_end(void);
