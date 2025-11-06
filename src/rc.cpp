@@ -58,7 +58,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
 
     uint8_t *d_int;
     // int16_t d_short;
-    uint16_t d_uint16;
+    //uint16_t d_uint16;
 
     if (!TelemAddr[0] && !TelemAddr[1] && !TelemAddr[2] && !TelemAddr[3] && !TelemAddr[4] && !TelemAddr[5]) {
         memcpy(TelemAddr, mac_addr, 6);
@@ -94,25 +94,22 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
     }
 
     uint16_t dummy;
+    d_int         = (uint8_t *)&dummy;
 
     d_int[0]        = recv_data[3];
     d_int[1]        = recv_data[4];
-    dummy = d_uint16;
     Stick[THROTTLE] = (float)(dummy - 2048)/(float)(4096*0.5);
 
     d_int[0]       = recv_data[5];
     d_int[1]       = recv_data[6];
-    dummy = d_uint16;
     Stick[AILERON] = (float)(dummy - 2048)/(float)(4096*0.5);
 
     d_int[0]        = recv_data[7];
     d_int[1]        = recv_data[8];
-    dummy = d_uint16;
     Stick[ELEVATOR] = (float)(dummy - 2048)/(float)(4096*0.5);
 
     d_int[0]      = recv_data[9];
     d_int[1]      = recv_data[10];
-    dummy = d_uint16;
     Stick[RUDDER] = (float)(dummy - 2048)/(float)(4096*0.5);
 
     Stick[BUTTON_ARM]     = 0x0001 & recv_data[11];  // auto_up_down_status
@@ -125,7 +122,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
     Stick[LOG] = 0.0;
     // if (check_sum!=recv_data[23])USBSerial.printf("checksum=%03d recv_sum=%03d\n\r", check_sum, recv_data[23]);
 
-#if 1
+#if 0
   USBSerial.printf("%6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f  %6.3f\n\r", 
                                             Stick[THROTTLE],
                                             Stick[AILERON],
