@@ -52,13 +52,51 @@ volatile uint8_t Recv_MAC[3];
 
 void on_esp_now_sent(const uint8_t *mac_addr, esp_now_send_status_t status);
 
-// 受信コールバック
+// 受信コールバック / Receive callback
+//
+// 制御パケットは2系統のコントローラを自動判定でサポート:
+// Auto-detect controller protocol by packet length, supporting two variants:
+//
+//   [新] stampfly_ecosystem コントローラ: 14 バイト
+//   [NEW] stampfly_ecosystem controller: 14 bytes
+//     Byte  0-2 : ドローン MAC 下位3バイト
+//     Byte  3-4 : Throttle (uint16 LE, 0-4095, center 2048, self-centering stick)
+//     Byte  5-6 : Roll/phi  (uint16 LE, 0-4095, center 2048)
+//     Byte  7-8 : Pitch/theta (uint16 LE, 0-4095, center 2048)
+//     Byte  9-10: Yaw/psi   (uint16 LE, 0-4095, center 2048)
+//     Byte 11   : flags (bit0=Arm, bit1=Flip, bit2=Mode, bit3=AltMode, bit4=PosMode)
+//     Byte 12   : reserved (proactive_flag) -> ahrs_reset_flag
+//     Byte 13   : checksum = sum(bytes 0-12)
+//
+//   [旧] M5StampFly_Controller (legacy): 25 バイト
+//   [LEGACY] M5StampFly_Controller: 25 bytes
+//     Byte  0-2 : ドローン MAC 下位3バイト
+//     Byte  3-6 : float32 Rudder
+//     Byte  7-10: float32 Throttle
+//     Byte 11-14: float32 Aileron
+//     Byte 15-18: float32 Elevator
+//     Byte 19   : BUTTON_ARM
+//     Byte 20   : BUTTON_FLIP
+//     Byte 21   : CONTROLMODE   (0=ANGLE, 1=RATE)
+//     Byte 22   : ALTCONTROLMODE (4=AUTO_ALT, 5=MANUAL_ALT)
+//     Byte 23   : ahrs_reset_flag
+//     Byte 24   : checksum = sum(bytes 0-23)
+//
+// 2バイトのビーコン (0xBE 0xAC) はTDMA同期用で、ドローン側では無視
+// 2-byte beacons (0xBE 0xAC) are for TDMA master sync, ignored on drone side
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len) {
-    Connect_flag = 0;
+    // ビーコンパケットは無視 / Ignore beacon packets
+    if (data_len == 2 && recv_data[0] == 0xBE && recv_data[1] == 0xAC) {
+        return;
+    }
 
-    uint8_t *d_int;
-    // int16_t d_short;
-    float d_float;
+    // パケット長で旧/新を判定 / Detect protocol by length
+    if (data_len != 14 && data_len != 25) {
+        Rc_err_flag = 1;
+        return;
+    }
+
+    Connect_flag = 0;
 
     if (!TelemAddr[0] && !TelemAddr[1] && !TelemAddr[2] && !TelemAddr[3] && !TelemAddr[4] && !TelemAddr[5]) {
         memcpy(TelemAddr, mac_addr, 6);
@@ -77,6 +115,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
     Recv_MAC[1] = recv_data[1];
     Recv_MAC[2] = recv_data[2];
 
+    // 自分宛か確認 / Confirm packet is addressed to us
     if ((recv_data[0] == MyMacAddr[3]) && (recv_data[1] == MyMacAddr[4]) && (recv_data[2] == MyMacAddr[5])) {
         Rc_err_flag = 0;
     } else {
@@ -84,62 +123,85 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
         return;
     }
 
-    // checksum
-    uint8_t check_sum = 0;
-    for (uint8_t i = 0; i < 24; i++) check_sum = check_sum + recv_data[i];
-    // if (check_sum!=recv_data[23])USBSerial.printf("checksum=%03d recv_sum=%03d\n\r", check_sum, recv_data[23]);
-    if (check_sum != recv_data[24]) {
-        Rc_err_flag = 1;
-        return;
+    if (data_len == 14) {
+        // ====== 新プロトコル (stampfly_ecosystem) / New protocol ======
+        // checksum: sum(bytes 0-12) == byte 13
+        uint8_t check_sum = 0;
+        for (uint8_t i = 0; i < 13; i++) check_sum += recv_data[i];
+        if (check_sum != recv_data[13]) {
+            Rc_err_flag = 1;
+            return;
+        }
+
+        uint16_t throttle_raw = (uint16_t)recv_data[3] | ((uint16_t)recv_data[4] << 8);
+        uint16_t roll_raw     = (uint16_t)recv_data[5] | ((uint16_t)recv_data[6] << 8);
+        uint16_t pitch_raw    = (uint16_t)recv_data[7] | ((uint16_t)recv_data[8] << 8);
+        uint16_t yaw_raw      = (uint16_t)recv_data[9] | ((uint16_t)recv_data[10] << 8);
+        uint8_t  flags        = recv_data[11];
+
+        // AtomS3 Joy はセルフセンタリングのため、全軸 center 2048 -> 0 にマップ
+        // flight_control.cpp の不感帯 |thlo|<0.2 と clamp(thlo, 0, 1) と整合する
+        Stick[THROTTLE] = ((float)throttle_raw - 2048.0f) / 2048.0f;
+        Stick[AILERON]  = ((float)roll_raw     - 2048.0f) / 2048.0f;
+        Stick[ELEVATOR] = ((float)pitch_raw    - 2048.0f) / 2048.0f;
+        Stick[RUDDER]   = ((float)yaw_raw      - 2048.0f) / 2048.0f;
+
+        Stick[BUTTON_ARM]  = (flags & 0x01) ? 1.0f : 0.0f;
+        Stick[BUTTON_FLIP] = (flags & 0x02) ? 1.0f : 0.0f;
+        Stick[CONTROLMODE] = (flags & 0x04) ? 1.0f : 0.0f;  // 0=ANGLE, 1=RATE
+
+        // AltMode (bit3) -> AUTO_ALT(4) / MANUAL_ALT(5)
+        // PosMode (bit4) はドローン側未実装のため AltMode と同じく AUTO_ALT 扱い
+        Stick[ALTCONTROLMODE] = (flags & 0x08) ? (float)AUTO_ALT : (float)MANUAL_ALT;
+
+        ahrs_reset_flag = recv_data[12];
+    } else {
+        // ====== 旧プロトコル (M5StampFly_Controller) / Legacy protocol ======
+        // checksum: sum(bytes 0-23) == byte 24
+        uint8_t check_sum = 0;
+        for (uint8_t i = 0; i < 24; i++) check_sum += recv_data[i];
+        if (check_sum != recv_data[24]) {
+            Rc_err_flag = 1;
+            return;
+        }
+
+        uint8_t *d_int;
+        float d_float;
+
+        d_int    = (uint8_t *)&d_float;
+        d_int[0] = recv_data[3];
+        d_int[1] = recv_data[4];
+        d_int[2] = recv_data[5];
+        d_int[3] = recv_data[6];
+        Stick[RUDDER] = d_float;
+
+        d_int[0] = recv_data[7];
+        d_int[1] = recv_data[8];
+        d_int[2] = recv_data[9];
+        d_int[3] = recv_data[10];
+        Stick[THROTTLE] = d_float;
+
+        d_int[0] = recv_data[11];
+        d_int[1] = recv_data[12];
+        d_int[2] = recv_data[13];
+        d_int[3] = recv_data[14];
+        Stick[AILERON] = d_float;
+
+        d_int[0] = recv_data[15];
+        d_int[1] = recv_data[16];
+        d_int[2] = recv_data[17];
+        d_int[3] = recv_data[18];
+        Stick[ELEVATOR] = d_float;
+
+        Stick[BUTTON_ARM]     = recv_data[19];
+        Stick[BUTTON_FLIP]    = recv_data[20];
+        Stick[CONTROLMODE]    = recv_data[21];
+        Stick[ALTCONTROLMODE] = recv_data[22];
+
+        ahrs_reset_flag = recv_data[23];
     }
 
-    d_int         = (uint8_t *)&d_float;
-    d_int[0]      = recv_data[3];
-    d_int[1]      = recv_data[4];
-    d_int[2]      = recv_data[5];
-    d_int[3]      = recv_data[6];
-    Stick[RUDDER] = d_float;
-
-    d_int[0]        = recv_data[7];
-    d_int[1]        = recv_data[8];
-    d_int[2]        = recv_data[9];
-    d_int[3]        = recv_data[10];
-    Stick[THROTTLE] = d_float;
-
-    d_int[0]       = recv_data[11];
-    d_int[1]       = recv_data[12];
-    d_int[2]       = recv_data[13];
-    d_int[3]       = recv_data[14];
-    Stick[AILERON] = d_float;
-
-    d_int[0]        = recv_data[15];
-    d_int[1]        = recv_data[16];
-    d_int[2]        = recv_data[17];
-    d_int[3]        = recv_data[18];
-    Stick[ELEVATOR] = d_float;
-
-    Stick[BUTTON_ARM]     = recv_data[19];  // auto_up_down_status
-    Stick[BUTTON_FLIP]    = recv_data[20];
-    Stick[CONTROLMODE]    = recv_data[21];  // Mode:rate or angle control
-    Stick[ALTCONTROLMODE] = recv_data[22];  // 高度制御
-
-    ahrs_reset_flag = recv_data[23];
-
-    Stick[LOG] = 0.0;
-    // if (check_sum!=recv_data[23])USBSerial.printf("checksum=%03d recv_sum=%03d\n\r", check_sum, recv_data[23]);
-
-#if 0
-  USBSerial.printf("%6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f  %6.3f\n\r", 
-                                            Stick[THROTTLE],
-                                            Stick[AILERON],
-                                            Stick[ELEVATOR],
-                                            Stick[RUDDER],
-                                            Stick[BUTTON_ARM],
-                                            Stick[BUTTON_FLIP],
-                                            Stick[CONTROLMODE],
-                                            Stick[ALTCONTROLMODE],
-                                            Stick[LOG]);
-#endif
+    Stick[LOG] = 0.0f;
 }
 
 // 送信コールバック
