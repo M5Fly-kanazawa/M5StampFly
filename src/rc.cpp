@@ -53,12 +53,32 @@ volatile uint8_t Recv_MAC[3];
 void on_esp_now_sent(const uint8_t *mac_addr, esp_now_send_status_t status);
 
 // 受信コールバック
+// 新コントローラ (stampfly_ecosystem) のControlPacket (14バイト) を解析する
+// Parse the 14-byte ControlPacket from stampfly_ecosystem controller
+//   Byte  0-2 : ドローン MAC 下位3バイト / drone MAC lower 3 bytes
+//   Byte  3-4 : Throttle (uint16 LE, 0-4095, 0=stick down, 4095=stick up)
+//   Byte  5-6 : Roll/phi (uint16 LE, 0-4095, 中央 center=2048)
+//   Byte  7-8 : Pitch/theta (uint16 LE, 0-4095, 中央 center=2048)
+//   Byte  9-10: Yaw/psi (uint16 LE, 0-4095, 中央 center=2048)
+//   Byte 11   : flags (bit0=Arm, bit1=Flip, bit2=Mode, bit3=AltMode, bit4=PosMode)
+//   Byte 12   : reserved (proactive_flag) - currently used as ahrs_reset_flag
+//   Byte 13   : checksum = sum of bytes 0-12
+// 2バイトのビーコン (0xBE 0xAC) はマスターコントローラ間同期用で、ドローン側では無視
+// 2-byte beacons (0xBE 0xAC) are for master controller TDMA sync, ignored on drone side
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len) {
-    Connect_flag = 0;
+    // ビーコンパケットは無視 (TDMA用、ドローンには無関係)
+    // Ignore beacon packets (used for TDMA, irrelevant to drone)
+    if (data_len == 2 && recv_data[0] == 0xBE && recv_data[1] == 0xAC) {
+        return;
+    }
 
-    uint8_t *d_int;
-    // int16_t d_short;
-    float d_float;
+    // 制御パケットは 14バイト固定 / Control packets are fixed 14 bytes
+    if (data_len != 14) {
+        Rc_err_flag = 1;
+        return;
+    }
+
+    Connect_flag = 0;
 
     if (!TelemAddr[0] && !TelemAddr[1] && !TelemAddr[2] && !TelemAddr[3] && !TelemAddr[4] && !TelemAddr[5]) {
         memcpy(TelemAddr, mac_addr, 6);
@@ -77,6 +97,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
     Recv_MAC[1] = recv_data[1];
     Recv_MAC[2] = recv_data[2];
 
+    // 自分宛か確認 / Confirm this packet is addressed to us
     if ((recv_data[0] == MyMacAddr[3]) && (recv_data[1] == MyMacAddr[4]) && (recv_data[2] == MyMacAddr[5])) {
         Rc_err_flag = 0;
     } else {
@@ -84,62 +105,49 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
         return;
     }
 
-    // checksum
+    // チェックサム検証 (バイト 0-12 の総和 == バイト 13)
+    // Verify checksum (sum of bytes 0-12 == byte 13)
     uint8_t check_sum = 0;
-    for (uint8_t i = 0; i < 24; i++) check_sum = check_sum + recv_data[i];
-    // if (check_sum!=recv_data[23])USBSerial.printf("checksum=%03d recv_sum=%03d\n\r", check_sum, recv_data[23]);
-    if (check_sum != recv_data[24]) {
+    for (uint8_t i = 0; i < 13; i++) check_sum += recv_data[i];
+    if (check_sum != recv_data[13]) {
         Rc_err_flag = 1;
         return;
     }
 
-    d_int         = (uint8_t *)&d_float;
-    d_int[0]      = recv_data[3];
-    d_int[1]      = recv_data[4];
-    d_int[2]      = recv_data[5];
-    d_int[3]      = recv_data[6];
-    Stick[RUDDER] = d_float;
+    // uint16 LE 値の取り出し / Extract uint16 LE values
+    uint16_t throttle_raw = (uint16_t)recv_data[3] | ((uint16_t)recv_data[4] << 8);
+    uint16_t roll_raw     = (uint16_t)recv_data[5] | ((uint16_t)recv_data[6] << 8);
+    uint16_t pitch_raw    = (uint16_t)recv_data[7] | ((uint16_t)recv_data[8] << 8);
+    uint16_t yaw_raw      = (uint16_t)recv_data[9] | ((uint16_t)recv_data[10] << 8);
+    uint8_t flags         = recv_data[11];
 
-    d_int[0]        = recv_data[7];
-    d_int[1]        = recv_data[8];
-    d_int[2]        = recv_data[9];
-    d_int[3]        = recv_data[10];
-    Stick[THROTTLE] = d_float;
+    // 正規化 / Normalize to flight_control.cpp expected ranges
+    //   Throttle : 0-4095 -> 0.0 .. 1.0
+    //   Roll/Pitch/Yaw: 0-4095 (center 2048) -> -1.0 .. +1.0
+    Stick[THROTTLE] = (float)throttle_raw / 4095.0f;
+    Stick[AILERON]  = ((float)roll_raw  - 2048.0f) / 2048.0f;
+    Stick[ELEVATOR] = ((float)pitch_raw - 2048.0f) / 2048.0f;
+    Stick[RUDDER]   = ((float)yaw_raw   - 2048.0f) / 2048.0f;
 
-    d_int[0]       = recv_data[11];
-    d_int[1]       = recv_data[12];
-    d_int[2]       = recv_data[13];
-    d_int[3]       = recv_data[14];
-    Stick[AILERON] = d_float;
+    // フラグをばらして Stick[] に書き戻し / Decode flags into Stick[]
+    Stick[BUTTON_ARM]  = (flags & 0x01) ? 1.0f : 0.0f;
+    Stick[BUTTON_FLIP] = (flags & 0x02) ? 1.0f : 0.0f;
+    Stick[CONTROLMODE] = (flags & 0x04) ? 1.0f : 0.0f;  // 0=ANGLECONTROL, 1=RATECONTROL
 
-    d_int[0]        = recv_data[15];
-    d_int[1]        = recv_data[16];
-    d_int[2]        = recv_data[17];
-    d_int[3]        = recv_data[18];
-    Stick[ELEVATOR] = d_float;
+    // AltMode (bit3) -> AUTO_ALT(4) / MANUAL_ALT(5)
+    // PosMode (bit4) はドローン側未実装のため AltMode と同じく AUTO_ALT 扱い
+    // PosMode (bit4) not implemented in drone; treated same as AltMode (AUTO_ALT)
+    if (flags & 0x08) {
+        Stick[ALTCONTROLMODE] = (float)AUTO_ALT;
+    } else {
+        Stick[ALTCONTROLMODE] = (float)MANUAL_ALT;
+    }
 
-    Stick[BUTTON_ARM]     = recv_data[19];  // auto_up_down_status
-    Stick[BUTTON_FLIP]    = recv_data[20];
-    Stick[CONTROLMODE]    = recv_data[21];  // Mode:rate or angle control
-    Stick[ALTCONTROLMODE] = recv_data[22];  // 高度制御
+    // byte 12 (proactive_flag) を ahrs_reset_flag として使用
+    // Use byte 12 (proactive_flag) as ahrs_reset_flag
+    ahrs_reset_flag = recv_data[12];
 
-    ahrs_reset_flag = recv_data[23];
-
-    Stick[LOG] = 0.0;
-    // if (check_sum!=recv_data[23])USBSerial.printf("checksum=%03d recv_sum=%03d\n\r", check_sum, recv_data[23]);
-
-#if 0
-  USBSerial.printf("%6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f  %6.3f\n\r", 
-                                            Stick[THROTTLE],
-                                            Stick[AILERON],
-                                            Stick[ELEVATOR],
-                                            Stick[RUDDER],
-                                            Stick[BUTTON_ARM],
-                                            Stick[BUTTON_FLIP],
-                                            Stick[CONTROLMODE],
-                                            Stick[ALTCONTROLMODE],
-                                            Stick[LOG]);
-#endif
+    Stick[LOG] = 0.0f;
 }
 
 // 送信コールバック
