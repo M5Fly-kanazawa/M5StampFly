@@ -148,6 +148,24 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
     ahrs_reset_flag = recv_data[12];
 
     Stick[LOG] = 0.0f;
+
+    // デバッグ: 50パケットに1回 (約1秒間隔) flags を出力
+    // Debug: print flags every 50 packets (~1s)
+    static uint16_t dbg_cnt = 0;
+    if (++dbg_cnt >= 50) {
+        dbg_cnt = 0;
+        USBSerial.printf("flags=0x%02X arm=%d flip=%d ctrl=%d alt=%d pos=%d "
+                         "ALTCTRL=%d THR=%5.2f R=%+5.2f P=%+5.2f Y=%+5.2f\r\n",
+                         flags,
+                         (flags & 0x01) ? 1 : 0,
+                         (flags & 0x02) ? 1 : 0,
+                         (flags & 0x04) ? 1 : 0,
+                         (flags & 0x08) ? 1 : 0,
+                         (flags & 0x10) ? 1 : 0,
+                         (int)Stick[ALTCONTROLMODE],
+                         Stick[THROTTLE],
+                         Stick[AILERON], Stick[ELEVATOR], Stick[RUDDER]);
+    }
 }
 
 // 送信コールバック
