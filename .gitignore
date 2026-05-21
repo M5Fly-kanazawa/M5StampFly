@@ -44,3 +44,6 @@ lib/.DS_Store
 include/.DS_Store
 build/.DS_Store
 log/
+
+# pyenv local Python version (developer-local)
+.python-version
