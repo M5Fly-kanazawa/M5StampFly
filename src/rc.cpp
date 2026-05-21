@@ -122,12 +122,18 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *recv_data, int data_len)
     uint8_t flags         = recv_data[11];
 
     // 正規化 / Normalize to flight_control.cpp expected ranges
-    //   Throttle : 0-4095 -> 0.0 .. 1.0
-    //   Roll/Pitch/Yaw: 0-4095 (center 2048) -> -1.0 .. +1.0
-    Stick[THROTTLE] = (float)throttle_raw / 4095.0f;
-    Stick[AILERON]  = ((float)roll_raw  - 2048.0f) / 2048.0f;
-    Stick[ELEVATOR] = ((float)pitch_raw - 2048.0f) / 2048.0f;
-    Stick[RUDDER]   = ((float)yaw_raw   - 2048.0f) / 2048.0f;
+    // AtomS3 Joy のスロットルはセルフセンタリングのため、roll/pitch/yaw と同じく
+    // 0-4095 (中央 2048) を -1.0..+1.0 にマップする。中央 = 0 = 無操作。
+    // The AtomS3 Joy throttle stick is self-centering, so map it the same way
+    // as roll/pitch/yaw: raw 0-4095 (center 2048) -> -1.0..+1.0
+    //   center (rest)   -> 0    (no command, manual mode keeps motors near idle)
+    //   stick up   (max)-> +1   (climb / full throttle)
+    //   stick down (min)-> -1   (descend; clamped to 0 thrust in manual)
+    // flight_control.cpp の不感帯 |thlo|<0.2 と clamp(thlo, 0, 1) がこれで整合する。
+    Stick[THROTTLE] = ((float)throttle_raw - 2048.0f) / 2048.0f;
+    Stick[AILERON]  = ((float)roll_raw     - 2048.0f) / 2048.0f;
+    Stick[ELEVATOR] = ((float)pitch_raw    - 2048.0f) / 2048.0f;
+    Stick[RUDDER]   = ((float)yaw_raw      - 2048.0f) / 2048.0f;
 
     // フラグをばらして Stick[] に書き戻し / Decode flags into Stick[]
     Stick[BUTTON_ARM]  = (flags & 0x01) ? 1.0f : 0.0f;
